@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Roda de Futuros Colaborativa</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; background-color: #f4f7f9; color: #333; }
+        .app-container { display: none; }
+        .login-container { display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; }
+        header { background-color: #fff; padding: 10px 20px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
+        .controls { padding: 15px; background-color: #fff; border-bottom: 1px solid #ddd; }
+        #canvas-container { width: 100%; height: calc(100vh - 130px); overflow: hidden; position: relative; }
+        svg { width: 100%; height: 100%; }
+        .node circle { stroke: #3498db; stroke-width: 2px; transition: fill 0.2s; }
+        .node text { font-size: 12px; pointer-events: none; text-anchor: middle; }
+        .node.central circle { fill: #3498db; }
+        .node.central text { fill: white; font-weight: bold; }
+        .node.impact-1 circle { fill: #eaf5fc; }
+        .node.impact-2 circle { fill: #d6ecf9; }
+        .node.impact-3 circle { fill: #c1e3f6; }
+        .node.selected circle { stroke: #e74c3c; stroke-width: 3px; }
+        .link { stroke: #999; stroke-opacity: 0.6; stroke-width: 1.5px; }
+        button { background-color: #3498db; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 14px; }
+        button:hover { background-color: #2980b9; }
+        #user-info { font-size: 14px; }
+        #selected-node-panel { padding: 0 15px; }
+    </style>
+</head>
+<body>
+
+    <!-- TELA DE LOGIN -->
+    <div id="login-container" class="login-container">
+        <h1>Roda de Futuros Colaborativa</h1>
+        <p>Faça login para começar a criar e colaborar.</p>
+        <button id="login-btn">Login com Google</button>
+    </div>
+
+    <!-- APLICAÇÃO PRINCIPAL -->
+    <div id="app-container" class="app-container">
+        <header>
+            <h2 id="project-title">Carregando Projeto...</h2>
+            <div id="user-info">
+                <span id="user-name"></span>
+                <button id="logout-btn">Sair</button>
+            </div>
+        </header>
+        <div class="controls">
+            <div id="selected-node-panel">
+                <span>Nenhum impacto selecionado.</span>
+                <button id="add-impact-btn" style="display: none;">Adicionar Impacto Filho</button>
+            </div>
+        </div>
+        <div id="canvas-container">
+            <svg id="canvas"></svg>
+        </div>
+    </div>
+
+    <!-- SCRIPTS DO FIREBASE -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+    <script>
+        // ******************************************************
+        // ** 1. CONFIGURAÇÃO DO FIREBASE **
+        // COLE SUAS CREDENCIAIS DO FIREBASE AQUI
+        const firebaseConfig = {
+            // apiKey: "AIzaSyASbr2jeHFGVldr_kh7PKI_dKSLdlFXEg0",
+            // authDomain: "futuresight-wheels-8ea8w.firebaseapp.com",
+            // projectId: "futuresight-wheels-8ea8w",
+            // storageBucket: "futuresight-wheels-8ea8w.firebasestorage.app",
+            // messagingSenderId: "1002185833257",
+            // appId: "1:1002185833257:web:36c6016d11bf1048975538"
+        };
+        // ******************************************************
+
+        // Inicialização do Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const googleProvider = new firebase.auth.GoogleAuthProvider();
+
+        // Variáveis de Estado Global
+        let currentUser = null;
+        let currentProjectId = "defaultProject"; // Para simplificar, usamos um ID de projeto fixo
+        let unsubscribeFromImpacts = null;
+        let nodesData = [];
+        let selectedNodeId = null;
+
+        // Elementos da UI
+        const loginContainer = document.getElementById('login-container');
+        const appContainer = document.getElementById('app-container');
+        const loginBtn = document.getElementById('login-btn');
+        const logoutBtn = document.getElementById('logout-btn');
+        const userNameEl = document.getElementById('user-name');
+        const projectTitleEl = document.getElementById('project-title');
+        const svg = document.getElementById('canvas');
+        const selectedNodePanel = document.getElementById('selected-node-panel');
+        const addImpactBtn = document.getElementById('add-impact-btn');
+
+        // ******************************************************
+        // ** 2. LÓGICA DE AUTENTICAÇÃO **
+        // ******************************************************
+
+        loginBtn.onclick = () => auth.signInWithPopup(googleProvider);
+        logoutBtn.onclick = () => auth.signOut();
+
+        auth.onAuthStateChanged(user => {
+            if (user) {
+                currentUser = user;
+                loginContainer.style.display = 'none';
+                appContainer.style.display = 'block';
+                userNameEl.textContent = user.displayName;
+                initApp();
+            } else {
+                currentUser = null;
+                loginContainer.style.display = 'block';
+                appContainer.style.display = 'none';
+                if (unsubscribeFromImpacts) unsubscribeFromImpacts();
+            }
+        });
+
+        // ******************************************************
+        // ** 3. LÓGICA PRINCIPAL DA APLICAÇÃO **
+        // ******************************************************
+
+        async function initApp() {
+            // Verifica se o projeto padrão existe, senão cria
+            const projectRef = db.collection('projects').doc(currentProjectId);
+            const doc = await projectRef.get();
+            if (!doc.exists) {
+                await projectRef.set({
+                    title: "Roda de Futuros Padrão",
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    phenomenon: { text: "Fenômeno Central" }
+                });
+            }
+            
+            // Escuta as mudanças no projeto
+            projectRef.onSnapshot(doc => {
+                projectTitleEl.textContent = doc.data().title;
+                if (!selectedNodeId) {
+                    updateSelectedNodePanel({ id: 'central', text: doc.data().phenomenon.text });
+                }
+            });
+            
+            // Escuta as mudanças nos impactos em tempo real
+            listenToImpacts();
+        }
+
+        function listenToImpacts() {
+            if (unsubscribeFromImpacts) unsubscribeFromImpacts();
+
+            const impactsRef = db.collection('projects').doc(currentProjectId).collection('impacts');
+            unsubscribeFromImpacts = impactsRef.onSnapshot(snapshot => {
+                nodesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderWheel();
+            });
+        }
+        
+        addImpactBtn.onclick = async () => {
+            if (!selectedNodeId) {
+                alert("Por favor, selecione um impacto para adicionar um filho.");
+                return;
+            }
+
+            const text = prompt("Digite a nova consequência:");
+            if (text && text.trim() !== "") {
+                const newImpact = {
+                    text: text.trim(),
+                    parentImpactId: selectedNodeId === 'central' ? null : selectedNodeId,
+                    creatorId: currentUser.uid,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                };
+                await db.collection('projects').doc(currentProjectId).collection('impacts').add(newImpact);
+                // O onSnapshot cuidará da renderização!
+            }
+        };
+
+        // ******************************************************
+        // ** 4. LÓGICA DE RENDERIZAÇÃO (SVG) **
+        // ******************************************************
+
+        function renderWheel() {
+            svg.innerHTML = ''; // Limpa o canvas
+
+            const width = svg.clientWidth;
+            const height = svg.clientHeight;
+            const centerX = width / 2;
+            const centerY = height / 2;
+            
+            // Constrói a árvore de dados
+            const tree = buildTree(nodesData);
+            
+            // Renderiza o nó central
+            const centralNode = { id: 'central', text: projectTitleEl.textContent, x: centerX, y: centerY, level: 0 };
+            renderNode(centralNode);
+
+            // Renderiza os impactos de 1ª ordem e seus filhos recursivamente
+            const firstLevelRadius = Math.min(width, height) / 4.5;
+            tree.forEach((node, i) => {
+                const angle = (i / tree.length) * 2 * Math.PI;
+                node.x = centerX + firstLevelRadius * Math.cos(angle);
+                node.y = centerY + firstLevelRadius * Math.sin(angle);
+                renderNodeAndChildren(node, centralNode, 1);
+            });
+        }
+        
+        function renderNodeAndChildren(node, parent, level) {
+            // Desenha a linha conectando ao pai
+            const link = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            link.setAttribute('class', 'link');
+            link.setAttribute('x1', parent.x);
+            link.setAttribute('y1', parent.y);
+            link.setAttribute('x2', node.x);
+            link.setAttribute('y2', node.y);
+            svg.appendChild(link);
+            
+            // Desenha o nó
+            node.level = level;
+            renderNode(node);
+            
+            // Desenha os filhos recursivamente
+            if (node.children && node.children.length > 0) {
+                const childRadius = 70 + (level * 10);
+                const angleSpread = Math.PI / (2 + level); // Espalha mais os nós filhos
+                const parentAngle = Math.atan2(node.y - parent.y, node.x - parent.x);
+
+                node.children.forEach((child, i) => {
+                    const angleOffset = (i - (node.children.length - 1) / 2) * angleSpread;
+                    const angle = parentAngle + angleOffset;
+                    child.x = node.x + childRadius * Math.cos(angle);
+                    child.y = node.y + childRadius * Math.sin(angle);
+                    renderNodeAndChildren(child, node, level + 1);
+                });
+            }
+        }
+
+        function renderNode(node) {
+            const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            group.setAttribute('class', `node impact-${node.level}`);
+            group.style.cursor = 'pointer';
+
+            if (node.id === 'central') {
+                 group.classList.add('central');
+            }
+            if (node.id === selectedNodeId) {
+                group.classList.add('selected');
+            }
+
+            const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            circle.setAttribute('r', 40);
+            circle.setAttribute('cx', node.x);
+            circle.setAttribute('cy', node.y);
+
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('x', node.x);
+            text.setAttribute('y', node.y);
+            
+            // Quebra de linha simples para o texto
+            const words = node.text.split(' ');
+            let line = '';
+            let lineCount = 0;
+            for(let n = 0; n < words.length; n++) {
+                const testLine = line + words[n] + ' ';
+                if (testLine.length > 10 && n > 0) {
+                    const tspan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+                    tspan.setAttribute('x', node.x);
+                    tspan.setAttribute('dy', '1.2em');
+                    tspan.textContent = line;
+                    text.appendChild(tspan);
+                    line = words[n] + ' ';
+                    lineCount++;
+                } else {
+                    line = testLine;
+                }
+            }
+            const tspan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+            tspan.setAttribute('x', node.x);
+            tspan.setAttribute('dy', '1.2em');
+            tspan.textContent = line;
+            text.appendChild(tspan);
+
+            // Ajusta a posição vertical do texto
+            text.setAttribute('transform', `translate(0, -${(lineCount * 12) / 2})`);
+            
+            group.appendChild(circle);
+            group.appendChild(text);
+            
+            group.onclick = () => {
+                selectedNodeId = node.id;
+                updateSelectedNodePanel(node);
+                renderWheel(); // Re-renderiza para mostrar a seleção
+            };
+            
+            svg.appendChild(group);
+        }
+
+        function updateSelectedNodePanel(node) {
+            if (!node) {
+                selectedNodePanel.innerHTML = `<span>Nenhum impacto selecionado.</span>`;
+                addImpactBtn.style.display = 'none';
+            } else {
+                selectedNodePanel.innerHTML = `<span>Selecionado: <strong>${node.text}</strong></span>`;
+                addImpactBtn.style.display = 'inline-block';
+            }
+        }
+
+        // Função auxiliar para construir a estrutura de árvore a partir dos dados planos
+        function buildTree(flatData) {
+            const map = {};
+            flatData.forEach(node => {
+                map[node.id] = { ...node, children: [] };
+            });
+
+            const tree = [];
+            flatData.forEach(node => {
+                if (node.parentImpactId && map[node.parentImpactId]) {
+                    map[node.parentImpactId].children.push(map[node.id]);
+                } else {
+                    tree.push(map[node.id]);
+                }
+            });
+            return tree;
+        }
+
+    </script>
+</body>
+</html>
