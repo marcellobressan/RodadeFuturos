@@ -28,7 +28,25 @@
     </style>
 </head>
 <body>
+<script type="module">
+  // Import the functions you need from the SDKs you need
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-app.js";
+  // TODO: Add SDKs for Firebase products that you want to use
+  // https://firebase.google.com/docs/web/setup#available-libraries
 
+  // Your web app's Firebase configuration
+  const firebaseConfig = {
+    apiKey: "AIzaSyASbr2jeHFGVldr_kh7PKI_dKSLdlFXEg0",
+    authDomain: "futuresight-wheels-8ea8w.firebaseapp.com",
+    projectId: "futuresight-wheels-8ea8w",
+    storageBucket: "futuresight-wheels-8ea8w.firebasestorage.app",
+    messagingSenderId: "1002185833257",
+    appId: "1:1002185833257:web:36c6016d11bf1048975538"
+  };
+
+  // Initialize Firebase
+  const app = initializeApp(firebaseConfig);
+</script>
     <!-- TELA DE LOGIN -->
     <div id="login-container" class="login-container">
         <h1>Roda de Futuros Colaborativa</h1>
